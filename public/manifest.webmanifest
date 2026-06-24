@@ -1,0 +1,58 @@
+{
+  "name": "Lumina Gastos",
+  "short_name": "Lumina",
+  "description": "Registro claro y proactivo de gastos personales.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "lang": "es-MX",
+  "dir": "ltr",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "background_color": "#f7f5ef",
+  "theme_color": "#f7f5ef",
+  "orientation": "portrait-primary",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Agregar gasto",
+      "short_name": "Agregar",
+      "description": "Abrir Lumina para registrar un gasto.",
+      "url": "/?action=add",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ver historial",
+      "short_name": "Historial",
+      "description": "Abrir Lumina para revisar movimientos.",
+      "url": "/?tab=history",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
