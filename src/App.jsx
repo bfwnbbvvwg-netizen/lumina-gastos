@@ -144,8 +144,10 @@ function App() {
   const [session, setSession] = useState(null);
   const [isInitializing, setIsInitializing] = useState(supabaseEnabled);
   const [activeTab, setActiveTab] = useState('month');
-  const [transactions, setTransactions] = useState(initialTransactions);
-  const [recurringExpenses, setRecurringExpenses] = useState(initialRecurringExpenses);
+  const [transactions, setTransactions] = useState(supabaseEnabled ? [] : initialTransactions);
+  const [recurringExpenses, setRecurringExpenses] = useState(
+    supabaseEnabled ? [] : initialRecurringExpenses,
+  );
   const [weekIndex, setWeekIndex] = useState(2);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('todos');
@@ -199,6 +201,10 @@ function App() {
     }
 
     let cancelled = false;
+    setTransactions([]);
+    setRecurringExpenses([]);
+    setRemoteAlerts([]);
+    setSyncMessage('Cargando tus datos...');
 
     async function loadRemoteTransactions() {
       try {
@@ -323,7 +329,9 @@ function App() {
       setIsAdding(false);
     } catch (error) {
       setSyncMessage(`No se pudo guardar en Supabase: ${error.message}`);
-      setTransactions((current) => [nextTransaction, ...current]);
+      if (!(supabaseEnabled && session)) {
+        setTransactions((current) => [nextTransaction, ...current]);
+      }
       setIsAdding(false);
     }
   }
@@ -331,8 +339,8 @@ function App() {
   async function handleSignOut() {
     try {
       await signOut();
-      setTransactions(initialTransactions);
-      setRecurringExpenses(initialRecurringExpenses);
+      setTransactions(supabaseEnabled ? [] : initialTransactions);
+      setRecurringExpenses(supabaseEnabled ? [] : initialRecurringExpenses);
       setRemoteAlerts([]);
       setSyncMessage('Sesion cerrada.');
     } catch (error) {
@@ -587,12 +595,16 @@ function DonutChart({ categories, total }) {
       return `${category.color} ${start}% ${offset}%`;
     })
     .join(', ');
+  const chartBackground =
+    categories.length > 0
+      ? `conic-gradient(${gradient}, #ebe7dc ${offset}% 100%)`
+      : '#ebe7dc';
 
   return (
     <div className="grid w-full gap-5 sm:grid-cols-[190px_1fr] sm:items-center">
       <div
         className="mx-auto h-48 w-48 rounded-full"
-        style={{ background: `conic-gradient(${gradient}, #ebe7dc ${offset}% 100%)` }}
+        style={{ background: chartBackground }}
         aria-label="Distribucion de gastos"
       >
         <div className="flex h-full w-full items-center justify-center rounded-full p-8">
