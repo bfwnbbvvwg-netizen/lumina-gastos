@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { getSession, onAuthStateChange, signOut } from './services/auth';
 import { listAlerts, markAlertRead } from './services/alerts';
+import { listIncomes, saveIncome } from './services/incomes';
 import { listRecurringExpenses } from './services/recurring';
 import { isSupabaseReady, listTransactions, saveTransaction } from './services/transactions';
 import Login from './views/Login';
@@ -50,6 +51,10 @@ const initialTransactions = [
   { id: 8, category: 'comida', description: 'Mercado', date: '2026-06-18', amount: 1120 },
   { id: 9, category: 'compras', description: 'Regalo', date: '2026-06-21', amount: 650 },
   { id: 10, category: 'cafe', description: 'Panaderia', date: '2026-06-22', amount: 155 },
+];
+
+const initialIncomes = [
+  { id: 'i1', description: 'Nomina', source: 'Trabajo', date: '2026-06-01', amount: 12000 },
 ];
 
 const initialRecurringExpenses = [
@@ -114,7 +119,7 @@ function buildLocalAlerts({ percent, topCategory, maxDay, trendDown }) {
       id: 'local-budget-80',
       type: 'budget_80',
       title: 'Presupuesto en zona sensible',
-      body: `Ya usaste ${Math.round(percent)}% del presupuesto mensual. Revisa ${topCategory?.label ?? 'tu categoria principal'} antes de registrar mas gastos.`,
+      body: `Ya usaste ${Math.round(percent)}% de tus ingresos mensuales. Revisa ${topCategory?.label ?? 'tu categoria principal'} antes de registrar mas gastos.`,
     });
   }
 
@@ -145,6 +150,7 @@ function App() {
   const [isInitializing, setIsInitializing] = useState(supabaseEnabled);
   const [activeTab, setActiveTab] = useState('month');
   const [transactions, setTransactions] = useState(supabaseEnabled ? [] : initialTransactions);
+  const [incomes, setIncomes] = useState(supabaseEnabled ? [] : initialIncomes);
   const [recurringExpenses, setRecurringExpenses] = useState(
     supabaseEnabled ? [] : initialRecurringExpenses,
   );
@@ -202,6 +208,7 @@ function App() {
 
     let cancelled = false;
     setTransactions([]);
+    setIncomes([]);
     setRecurringExpenses([]);
     setRemoteAlerts([]);
     setSyncMessage('Cargando tus datos...');
@@ -214,6 +221,11 @@ function App() {
         if (result.mode === 'supabase') {
           setTransactions(result.transactions);
           setSyncMessage('Conectado a Supabase');
+
+          const incomesResult = await listIncomes();
+          if (!cancelled && incomesResult.mode === 'supabase') {
+            setIncomes(incomesResult.incomes);
+          }
 
           const alertsResult = await listAlerts();
           if (!cancelled && alertsResult.mode === 'supabase') {
@@ -241,13 +253,17 @@ function App() {
     };
   }, [session, supabaseEnabled]);
 
-  const budget = 12000;
+  const incomeTotal = useMemo(
+    () => incomes.reduce((total, income) => total + income.amount, 0),
+    [incomes],
+  );
+  const budget = incomeTotal;
   const spent = useMemo(
     () => transactions.reduce((total, transaction) => total + transaction.amount, 0),
     [transactions],
   );
-  const percent = Math.min((spent / budget) * 100, 100);
-  const remaining = Math.max(budget - spent, 0);
+  const percent = budget > 0 ? Math.min((spent / budget) * 100, 100) : spent > 0 ? 100 : 0;
+  const remaining = budget - spent;
 
   const rankedCategories = useMemo(() => {
     return Object.keys(categories)
@@ -303,15 +319,46 @@ function App() {
     })
     .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date));
 
-  async function addTransaction(formData) {
-    const nextTransaction = {
+  async function addMovement(formData) {
+    const movementType = formData.get('movementType');
+    const nextMovement = {
       id: crypto.randomUUID(),
-      description: formData.get('description') || 'Gasto rapido',
+      description: formData.get('description') || (movementType === 'income' ? 'Ingreso' : 'Gasto rapido'),
       amount: Number(formData.get('amount')),
-      category: formData.get('category'),
       date: formData.get('date'),
     };
-    if (!nextTransaction.amount || !nextTransaction.date) return;
+    if (!nextMovement.amount || !nextMovement.date) return;
+
+    if (movementType === 'income') {
+      const nextIncome = {
+        ...nextMovement,
+        source: formData.get('source') || '',
+      };
+
+      try {
+        const result = await saveIncome(nextIncome);
+        if (result.mode === 'needs-auth') {
+          setSyncMessage('Ingreso guardado localmente; inicia sesion para activar Supabase.');
+          setIncomes((current) => [nextIncome, ...current]);
+        } else {
+          setSyncMessage(result.mode === 'supabase' ? 'Ingreso guardado en Supabase' : 'Ingreso guardado en demo');
+          setIncomes((current) => [result.income, ...current]);
+        }
+        setIsAdding(false);
+      } catch (error) {
+        setSyncMessage(`No se pudo guardar el ingreso: ${error.message}`);
+        if (!(supabaseEnabled && session)) {
+          setIncomes((current) => [nextIncome, ...current]);
+        }
+        setIsAdding(false);
+      }
+      return;
+    }
+
+    const nextTransaction = {
+      ...nextMovement,
+      category: formData.get('category'),
+    };
 
     try {
       const result = await saveTransaction(nextTransaction);
@@ -340,6 +387,7 @@ function App() {
     try {
       await signOut();
       setTransactions(supabaseEnabled ? [] : initialTransactions);
+      setIncomes(supabaseEnabled ? [] : initialIncomes);
       setRecurringExpenses(supabaseEnabled ? [] : initialRecurringExpenses);
       setRemoteAlerts([]);
       setSyncMessage('Sesion cerrada.');
@@ -474,19 +522,19 @@ function App() {
         <Plus aria-hidden="true" size={30} />
       </button>
 
-      {isAdding && <QuickAdd onClose={() => setIsAdding(false)} onSave={addTransaction} />}
+      {isAdding && <QuickAdd onClose={() => setIsAdding(false)} onSave={addMovement} />}
     </main>
   );
 }
 
 function BudgetPanel({ spent, budget, remaining, percent }) {
-  const barColor = percent >= 80 ? 'bg-coral' : 'bg-sage';
+  const barColor = remaining < 0 || percent >= 80 ? 'bg-coral' : 'bg-sage';
 
   return (
     <section className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-ink/55">Disponible</p>
+          <p className="text-sm font-semibold text-ink/55">Balance disponible</p>
           <p className="mt-1 text-4xl font-semibold tracking-normal sm:text-5xl">
             {currency.format(remaining)}
           </p>
@@ -501,7 +549,7 @@ function BudgetPanel({ spent, budget, remaining, percent }) {
         </div>
         <div className="mt-3 flex items-center justify-between text-sm font-medium text-ink/58">
           <span>{currency.format(spent)} gastado</span>
-          <span>{currency.format(budget)} total</span>
+          <span>{currency.format(budget)} ingresos</span>
         </div>
       </div>
     </section>
@@ -521,7 +569,7 @@ function InsightPanel({ percent, topCategory, maxDay, trendDown, alerts, onMarkA
         </div>
       </div>
       <p className="mt-5 text-sm leading-6 text-ink/70">
-        Has usado {Math.round(percent)}% del presupuesto. Tu mayor categoria es{' '}
+        Has usado {Math.round(percent)}% de tus ingresos registrados. Tu mayor categoria es{' '}
         <strong>{topCategory?.label ?? 'Sin datos'}</strong> y el dia mas alto de esta semana fue{' '}
         <strong>{maxDay.label}</strong> con <strong>{currency.format(maxDay.total)}</strong>.
       </p>
@@ -755,7 +803,7 @@ function RecurringView({ recurringExpenses, total, budget }) {
           <div className="h-full rounded-full bg-sky" style={{ width: `${Math.min(commitment, 100)}%` }} />
         </div>
         <p className="mt-3 text-sm font-medium leading-6 text-ink/62">
-          {commitment}% del presupuesto ya esta reservado antes de gastos variables.
+          {commitment}% de tus ingresos ya esta reservado antes de gastos variables.
         </p>
         {nextExpense && (
           <div className="mt-5 rounded-lg bg-sage/12 p-4">
@@ -877,7 +925,9 @@ function TransactionRow({ transaction }) {
 }
 
 function QuickAdd({ onClose, onSave }) {
+  const [movementType, setMovementType] = useState('expense');
   const today = new Date().toISOString().slice(0, 10);
+  const isIncome = movementType === 'income';
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-ink/35 p-0 backdrop-blur-sm sm:items-center sm:justify-center sm:p-6">
@@ -888,10 +938,13 @@ function QuickAdd({ onClose, onSave }) {
           onSave(new FormData(event.currentTarget));
         }}
       >
+        <input type="hidden" name="movementType" value={movementType} />
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-moss">Nuevo movimiento</p>
-            <h2 className="text-2xl font-semibold tracking-normal">Agregar gasto</h2>
+            <h2 className="text-2xl font-semibold tracking-normal">
+              {isIncome ? 'Agregar ingreso' : 'Agregar gasto'}
+            </h2>
           </div>
           <button
             type="button"
@@ -904,6 +957,26 @@ function QuickAdd({ onClose, onSave }) {
         </div>
 
         <div className="mt-6 grid gap-4">
+          <div className="grid grid-cols-2 rounded-full bg-paper p-1">
+            <button
+              type="button"
+              onClick={() => setMovementType('expense')}
+              className={`h-10 rounded-full text-sm font-semibold transition ${
+                !isIncome ? 'bg-ink text-white shadow-sm' : 'text-ink/60 hover:bg-white'
+              }`}
+            >
+              Gasto
+            </button>
+            <button
+              type="button"
+              onClick={() => setMovementType('income')}
+              className={`h-10 rounded-full text-sm font-semibold transition ${
+                isIncome ? 'bg-ink text-white shadow-sm' : 'text-ink/60 hover:bg-white'
+              }`}
+            >
+              Ingreso
+            </button>
+          </div>
           <label className="grid gap-2 text-sm font-semibold text-ink/65">
             Monto
             <input
@@ -923,24 +996,38 @@ function QuickAdd({ onClose, onSave }) {
               type="text"
               maxLength="100"
               className="h-12 rounded-lg border border-paper bg-paper px-4 text-ink outline-none transition focus:border-sage focus:bg-white"
-              placeholder="Comida"
+              placeholder={isIncome ? 'Nomina' : 'Comida'}
             />
           </label>
-          <div className="grid grid-cols-2 gap-3">
+          {isIncome && (
             <label className="grid gap-2 text-sm font-semibold text-ink/65">
-              Categoria
-              <select
-                name="category"
-                defaultValue="comida"
-                className="h-12 rounded-lg border border-paper bg-paper px-3 text-ink outline-none transition focus:border-sage focus:bg-white"
-              >
-                {Object.entries(categories).map(([key, category]) => (
-                  <option key={key} value={key}>
-                    {category.label}
-                  </option>
-                ))}
-              </select>
+              Fuente
+              <input
+                name="source"
+                type="text"
+                maxLength="80"
+                className="h-12 rounded-lg border border-paper bg-paper px-4 text-ink outline-none transition focus:border-sage focus:bg-white"
+                placeholder="Trabajo, venta, transferencia"
+              />
             </label>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            {!isIncome && (
+              <label className="grid gap-2 text-sm font-semibold text-ink/65">
+                Categoria
+                <select
+                  name="category"
+                  defaultValue="comida"
+                  className="h-12 rounded-lg border border-paper bg-paper px-3 text-ink outline-none transition focus:border-sage focus:bg-white"
+                >
+                  {Object.entries(categories).map(([key, category]) => (
+                    <option key={key} value={key}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="grid gap-2 text-sm font-semibold text-ink/65">
               Fecha
               <input

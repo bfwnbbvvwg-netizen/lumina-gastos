@@ -45,6 +45,7 @@ El esquema inicial esta en `supabase/schema.sql` e incluye:
 - `profiles`
 - `categories`
 - `transactions`
+- `incomes`
 - `alerts`
 - `recurring_expenses`
 - politicas RLS por usuario
@@ -52,6 +53,8 @@ El esquema inicial esta en `supabase/schema.sql` e incluye:
 - trigger para alertar al llegar al 80% del presupuesto mensual
 - trigger para crear perfil y categorias base al registrar un usuario
 - vista `monthly_spending`
+- vista `monthly_income`
+- vista `monthly_cashflow`
 - vista `monthly_recurring_commitments`
 
 ## Flujo Supabase
@@ -62,8 +65,15 @@ La app funciona en modo demo si no hay variables de entorno. Si `VITE_SUPABASE_U
 - leer transacciones reales
 - resolver o crear la categoria elegida
 - insertar el gasto desde el modal de registro rapido
+- registrar ingresos reales para calcular el balance mensual
 
 Sin variables de entorno, Lumina entra directo al dashboard con datos simulados. Con Supabase configurado, primero pide sesion; al cerrar sesion vuelve a la pantalla de acceso.
+
+## Ingresos mensuales
+
+El total mensual ya no depende de una cantidad fija. El boton Agregar permite elegir entre Gasto e Ingreso. Lumina calcula el disponible como ingresos registrados del mes menos gastos registrados del mes.
+
+Para proyectos Supabase que ya habian ejecutado el esquema anterior, corre `supabase/migrations/001_add_incomes.sql` en el SQL Editor.
 
 ## Alertas inteligentes
 

@@ -31,6 +31,16 @@ create table if not exists public.transactions (
   created_at timestamptz default timezone('utc', now())
 );
 
+create table if not exists public.incomes (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  amount numeric(10, 2) not null check (amount > 0),
+  description varchar(100),
+  source varchar(80),
+  income_date date not null default current_date,
+  created_at timestamptz default timezone('utc', now())
+);
+
 create table if not exists public.alerts (
   id uuid default uuid_generate_v4() primary key,
   user_id uuid references public.profiles(id) on delete cascade not null,
@@ -57,6 +67,7 @@ create table if not exists public.recurring_expenses (
 alter table public.profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.transactions enable row level security;
+alter table public.incomes enable row level security;
 alter table public.alerts enable row level security;
 alter table public.recurring_expenses enable row level security;
 
@@ -72,6 +83,11 @@ create policy "Categories are private"
 
 create policy "Transactions are private"
   on public.transactions for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Incomes are private"
+  on public.incomes for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
@@ -93,7 +109,7 @@ set search_path = public
 as $$
 begin
   insert into public.profiles (id, monthly_budget, currency)
-  values (new.id, 12000.00, 'MXN')
+  values (new.id, 0.00, 'MXN')
   on conflict (id) do nothing;
 
   insert into public.categories (user_id, category_key, name, icon_name, color_hex, is_default)
@@ -163,15 +179,25 @@ as $$
 declare
   month_start date := date_trunc('month', new.transaction_date)::date;
   monthly_spent numeric(10, 2);
+  income_total numeric(10, 2);
   budget numeric(10, 2);
   already_sent date;
 begin
-  select monthly_budget, alert_80_sent_month
-  into budget, already_sent
+  select alert_80_sent_month
+  into already_sent
   from public.profiles
   where id = new.user_id;
 
-  if budget is null or budget <= 0 then
+  select coalesce(sum(amount), 0)
+  into income_total
+  from public.incomes
+  where user_id = new.user_id
+    and income_date >= month_start
+    and income_date < (month_start + interval '1 month');
+
+  budget := coalesce(income_total, 0);
+
+  if budget <= 0 then
     return new;
   end if;
 
@@ -193,7 +219,7 @@ begin
       new.id,
       'budget_80',
       'Presupuesto en zona sensible',
-      'Ya consumiste al menos 80% de tu presupuesto mensual.'
+      'Ya consumiste al menos 80% de tus ingresos registrados este mes.'
     );
 
     update public.profiles
@@ -218,6 +244,26 @@ select
   sum(amount)::numeric(10, 2) as spent
 from public.transactions
 group by user_id, date_trunc('month', transaction_date)::date;
+
+create or replace view public.monthly_income as
+select
+  user_id,
+  date_trunc('month', income_date)::date as month,
+  sum(amount)::numeric(10, 2) as income
+from public.incomes
+group by user_id, date_trunc('month', income_date)::date;
+
+create or replace view public.monthly_cashflow as
+select
+  coalesce(i.user_id, s.user_id) as user_id,
+  coalesce(i.month, s.month) as month,
+  coalesce(i.income, 0)::numeric(10, 2) as income,
+  coalesce(s.spent, 0)::numeric(10, 2) as spent,
+  (coalesce(i.income, 0) - coalesce(s.spent, 0))::numeric(10, 2) as balance
+from public.monthly_income i
+full outer join public.monthly_spending s
+  on i.user_id = s.user_id
+ and i.month = s.month;
 
 create or replace view public.monthly_recurring_commitments as
 select
