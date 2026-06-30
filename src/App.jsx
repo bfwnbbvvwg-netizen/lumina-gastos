@@ -11,17 +11,24 @@ import {
   CircleDollarSign,
   Clock3,
   Coffee,
+  CloudSun,
+  Gauge,
   Home,
   Lightbulb,
   ListFilter,
   LogOut,
+  Mic,
   Plus,
+  Radar,
   ReceiptText,
   Search,
+  ShieldCheck,
   ShoppingBag,
   Sparkles,
   Repeat2,
+  TrendingUp,
   Utensils,
+  Wallet,
   WalletCards,
   X,
 } from 'lucide-react';
@@ -109,6 +116,175 @@ function getUpcomingDay(expense, today = new Date()) {
 
   const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   return lastDay - day + expense.billingDay;
+}
+
+function getDaysInMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+function isSameMonth(dateString, referenceDate) {
+  const date = parseLocalDate(dateString);
+  return date.getMonth() === referenceDate.getMonth() && date.getFullYear() === referenceDate.getFullYear();
+}
+
+function normalizeText(value) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '')
+    .trim();
+}
+
+function buildFinancialPulse({ transactions, incomes, recurringExpenses, spent, budget, remaining, percent }) {
+  const today = new Date();
+  const dayOfMonth = today.getDate();
+  const daysInMonth = getDaysInMonth(today);
+  const remainingDays = Math.max(daysInMonth - dayOfMonth + 1, 1);
+  const activeRecurring = recurringExpenses.filter((expense) => expense.isActive !== false);
+  const upcomingRecurring = activeRecurring
+    .filter((expense) => expense.billingDay >= dayOfMonth)
+    .sort((a, b) => a.billingDay - b.billingDay);
+  const upcomingRecurringTotal = upcomingRecurring.reduce((total, expense) => total + expense.amount, 0);
+  const dailySpendRate = dayOfMonth > 0 ? spent / dayOfMonth : 0;
+  const projectedVariableSpend = dailySpendRate * daysInMonth;
+  const projectedSpend = projectedVariableSpend + upcomingRecurringTotal;
+  const projectedBalance = budget - projectedSpend;
+  const safeToSpend = Math.max(0, (budget - spent - upcomingRecurringTotal) / remainingDays);
+  const recurringTotal = activeRecurring.reduce((total, expense) => total + expense.amount, 0);
+  const fixedRatio = budget > 0 ? recurringTotal / budget : 0;
+  const runwayDays = dailySpendRate > 0 ? Math.floor(Math.max(remaining, 0) / dailySpendRate) : remaining > 0 ? 99 : 0;
+
+  let weather = {
+    label: 'Despejado',
+    tone: 'text-moss',
+    bg: 'bg-sage/15',
+    body: 'Tu ritmo actual deja margen para cerrar el mes con calma.',
+  };
+
+  if (budget <= 0) {
+    weather = {
+      label: 'Sin ingresos',
+      tone: 'text-clay',
+      bg: 'bg-marigold/20',
+      body: 'Registra tu primer ingreso para activar pronosticos reales.',
+    };
+  } else if (remaining < 0 || percent >= 100) {
+    weather = {
+      label: 'Tormenta',
+      tone: 'text-clay',
+      bg: 'bg-coral/20',
+      body: 'Ya hay sobregiro frente a los ingresos registrados.',
+    };
+  } else if (projectedBalance < 0 || fixedRatio >= 0.55) {
+    weather = {
+      label: 'Nublado',
+      tone: 'text-clay',
+      bg: 'bg-marigold/20',
+      body: 'El cierre del mes puede quedar ajustado si el ritmo no baja.',
+    };
+  } else if (percent < 35 && dayOfMonth > 10) {
+    weather = {
+      label: 'Recuperacion',
+      tone: 'text-sky',
+      bg: 'bg-sky/15',
+      body: 'Vas por debajo del ritmo esperado para este punto del mes.',
+    };
+  }
+
+  const latestIncome = incomes
+    .slice()
+    .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date))[0];
+  const paydayAmount = latestIncome?.amount ?? budget;
+  const essentials = Math.min(recurringTotal, paydayAmount);
+  const flexible = Math.max(paydayAmount - essentials, 0);
+  const paydayPlan = [
+    { label: 'Fijos', amount: essentials },
+    { label: 'Flexible', amount: flexible * 0.65 },
+    { label: 'Colchon', amount: flexible * 0.25 },
+    { label: 'Deseos', amount: flexible * 0.1 },
+  ].filter((item) => item.amount > 0);
+
+  const timeline = [
+    ...incomes.map((income) => ({
+      id: `income-${income.id}`,
+      type: 'income',
+      date: income.date,
+      label: income.description,
+      meta: income.source || 'Ingreso',
+      amount: income.amount,
+    })),
+    ...transactions.map((transaction) => ({
+      id: `expense-${transaction.id}`,
+      type: 'expense',
+      date: transaction.date,
+      label: transaction.description,
+      meta: categories[transaction.category]?.label ?? 'Gasto',
+      amount: transaction.amount,
+    })),
+  ]
+    .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date))
+    .slice(0, 7);
+
+  const descriptionGroups = transactions.reduce((groups, transaction) => {
+    const normalized = normalizeText(transaction.description).split(' ').slice(0, 2).join(' ');
+    if (!normalized) return groups;
+    const current = groups[normalized] || { label: transaction.description, count: 0, total: 0 };
+    return {
+      ...groups,
+      [normalized]: {
+        ...current,
+        count: current.count + 1,
+        total: current.total + transaction.amount,
+      },
+    };
+  }, {});
+  const recurringCandidates = Object.values(descriptionGroups)
+    .filter((group) => group.count >= 2)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 3);
+
+  const cashflowCalendar = [
+    ...upcomingRecurring.slice(0, 4).map((expense) => ({
+      id: `recurring-${expense.id}`,
+      day: expense.billingDay,
+      label: expense.name,
+      amount: expense.amount,
+      type: 'out',
+    })),
+    ...(latestIncome
+      ? [
+          {
+            id: 'next-payday',
+            day: Math.min(parseLocalDate(latestIncome.date).getDate(), daysInMonth),
+            label: latestIncome.source || latestIncome.description,
+            amount: latestIncome.amount,
+            type: 'in',
+          },
+        ]
+      : []),
+  ].sort((a, b) => a.day - b.day);
+
+  const impulseItems = transactions
+    .filter((transaction) => ['cafe', 'compras', 'comida'].includes(transaction.category))
+    .slice()
+    .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date))
+    .slice(0, 3);
+
+  return {
+    safeToSpend,
+    projectedSpend,
+    projectedBalance,
+    dailySpendRate,
+    runwayDays,
+    fixedRatio,
+    weather,
+    paydayPlan,
+    timeline,
+    recurringCandidates,
+    cashflowCalendar,
+    impulseItems,
+  };
 }
 
 function buildLocalAlerts({ percent, topCategory, maxDay, trendDown }) {
@@ -306,6 +482,19 @@ function App() {
     [percent, rankedCategories, maxDay, trendDown],
   );
   const visibleAlerts = supabaseEnabled && session ? remoteAlerts : localAlerts;
+  const financialPulse = useMemo(
+    () =>
+      buildFinancialPulse({
+        transactions,
+        incomes,
+        recurringExpenses,
+        spent,
+        budget,
+        remaining,
+        percent,
+      }),
+    [transactions, incomes, recurringExpenses, spent, budget, remaining, percent],
+  );
 
   const filteredTransactions = transactions
     .filter((transaction) => {
@@ -464,6 +653,8 @@ function App() {
           />
         </section>
 
+        <IntelligencePanel pulse={financialPulse} />
+
         <nav className="sticky top-3 z-20 rounded-full border border-white/70 bg-white/85 p-1 shadow-soft backdrop-blur">
           <div className="flex gap-1 overflow-x-auto scrollbar-none sm:grid sm:grid-cols-5">
             {tabs.map((tab) => {
@@ -488,7 +679,12 @@ function App() {
         </nav>
 
         {activeTab === 'month' && (
-          <MonthView rankedCategories={rankedCategories} spent={spent} transactions={transactions} />
+          <MonthView
+            rankedCategories={rankedCategories}
+            spent={spent}
+            transactions={transactions}
+            pulse={financialPulse}
+          />
         )}
         {activeTab === 'week' && (
           <WeekView
@@ -608,28 +804,272 @@ function InsightPanel({ percent, topCategory, maxDay, trendDown, alerts, onMarkA
   );
 }
 
-function MonthView({ rankedCategories, spent, transactions }) {
+function IntelligencePanel({ pulse }) {
+  const weatherIcon = pulse.weather.label === 'Tormenta' ? Bell : CloudSun;
+  const WeatherIcon = weatherIcon;
+
   return (
-    <section className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-      <div className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
-        <h2 className="text-lg font-semibold tracking-normal">Top categorias</h2>
-        <div className="mt-5 flex items-center justify-center">
-          <DonutChart categories={rankedCategories.slice(0, 3)} total={spent} />
+    <section className="grid gap-4 lg:grid-cols-4">
+      <InsightMetric
+        icon={Wallet}
+        label="Seguro hoy"
+        value={currency.format(pulse.safeToSpend)}
+        body="Puedes gastar esto hoy y proteger el cierre del mes."
+      />
+      <InsightMetric
+        icon={TrendingUp}
+        label="Cierre probable"
+        value={currency.format(pulse.projectedBalance)}
+        body={`Si sigues igual, gastarias ${currency.format(pulse.projectedSpend)} este mes.`}
+      />
+      <InsightMetric
+        icon={Gauge}
+        label="Autonomia"
+        value={pulse.runwayDays >= 99 ? 'Alta' : `${pulse.runwayDays} dias`}
+        body={`${Math.round(pulse.fixedRatio * 100)}% de tus ingresos esta comprometido.`}
+      />
+      <article className="rounded-lg border border-white/80 bg-white p-4 shadow-soft">
+        <div className="flex items-center gap-3">
+          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${pulse.weather.bg} ${pulse.weather.tone}`}>
+            <WeatherIcon aria-hidden="true" size={20} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-ink/50">Clima financiero</p>
+            <h2 className="truncate text-lg font-semibold tracking-normal">{pulse.weather.label}</h2>
+          </div>
         </div>
-      </div>
-      <div className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
-        <h2 className="text-lg font-semibold tracking-normal">Movimientos recientes</h2>
-        <div className="mt-4 divide-y divide-paper">
-          {transactions
-            .slice()
-            .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date))
-            .slice(0, 5)
-            .map((transaction) => (
-              <TransactionRow key={transaction.id} transaction={transaction} />
-            ))}
-        </div>
-      </div>
+        <p className="mt-3 text-xs font-medium leading-5 text-ink/62">{pulse.weather.body}</p>
+      </article>
     </section>
+  );
+}
+
+function InsightMetric({ icon: Icon, label, value, body }) {
+  return (
+    <article className="rounded-lg border border-white/80 bg-white p-4 shadow-soft">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sage/15 text-moss">
+          <Icon aria-hidden="true" size={20} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-ink/50">{label}</p>
+          <h2 className="truncate text-lg font-semibold tracking-normal">{value}</h2>
+        </div>
+      </div>
+      <p className="mt-3 text-xs font-medium leading-5 text-ink/62">{body}</p>
+    </article>
+  );
+}
+
+function MonthView({ rankedCategories, spent, transactions, pulse }) {
+  return (
+    <section className="grid gap-5">
+      <div className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+        <div className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
+          <h2 className="text-lg font-semibold tracking-normal">Top categorias</h2>
+          <div className="mt-5 flex items-center justify-center">
+            <DonutChart categories={rankedCategories.slice(0, 3)} total={spent} />
+          </div>
+        </div>
+        <div className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
+          <h2 className="text-lg font-semibold tracking-normal">Movimientos recientes</h2>
+          <div className="mt-4 divide-y divide-paper">
+            {transactions
+              .slice()
+              .sort((a, b) => parseLocalDate(b.date) - parseLocalDate(a.date))
+              .slice(0, 5)
+              .map((transaction) => (
+                <TransactionRow key={transaction.id} transaction={transaction} />
+              ))}
+          </div>
+        </div>
+      </div>
+      <FinancialOpsGrid pulse={pulse} />
+    </section>
+  );
+}
+
+function FinancialOpsGrid({ pulse }) {
+  return (
+    <section className="grid gap-5 lg:grid-cols-3">
+      <MoneyTimeline items={pulse.timeline} />
+      <CashflowCalendar items={pulse.cashflowCalendar} />
+      <RadarPanel candidates={pulse.recurringCandidates} impulseItems={pulse.impulseItems} />
+      <PaydayPlan plan={pulse.paydayPlan} />
+      <PrivacyPanel />
+    </section>
+  );
+}
+
+function MoneyTimeline({ items }) {
+  return (
+    <article className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6 lg:col-span-2">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sky/15 text-sky">
+          <CalendarDays aria-hidden="true" size={20} />
+        </span>
+        <h2 className="text-lg font-semibold tracking-normal">Linea de dinero</h2>
+      </div>
+      <div className="mt-4 grid gap-3">
+        {items.length ? (
+          items.map((item) => (
+            <div key={item.id} className="grid grid-cols-[5rem_1fr_auto] items-center gap-3 rounded-lg bg-paper/60 p-3">
+              <span className="text-xs font-semibold text-ink/45">{formatShortDate(item.date)}</span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-ink">{item.label}</p>
+                <p className="text-xs font-medium text-ink/48">{item.meta}</p>
+              </div>
+              <span className={`text-sm font-semibold ${item.type === 'income' ? 'text-moss' : 'text-ink'}`}>
+                {item.type === 'income' ? '+' : '-'}
+                {currency.format(item.amount)}
+              </span>
+            </div>
+          ))
+        ) : (
+          <EmptyInsight icon={CalendarDays} label="Aun no hay historia financiera" />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function CashflowCalendar({ items }) {
+  return (
+    <article className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-marigold/20 text-clay">
+          <Clock3 aria-hidden="true" size={20} />
+        </span>
+        <h2 className="text-lg font-semibold tracking-normal">Calendario cashflow</h2>
+      </div>
+      <div className="mt-4 space-y-3">
+        {items.length ? (
+          items.map((item) => (
+            <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg bg-paper/60 p-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-ink/45">Dia {item.day}</p>
+                <p className="truncate text-sm font-semibold">{item.label}</p>
+              </div>
+              <span className={`text-sm font-semibold ${item.type === 'in' ? 'text-moss' : 'text-clay'}`}>
+                {item.type === 'in' ? '+' : '-'}
+                {currency.format(item.amount)}
+              </span>
+            </div>
+          ))
+        ) : (
+          <EmptyInsight icon={Clock3} label="Sin cargos o ingresos proximos" />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function RadarPanel({ candidates, impulseItems }) {
+  return (
+    <article className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sage/15 text-moss">
+          <Radar aria-hidden="true" size={20} />
+        </span>
+        <h2 className="text-lg font-semibold tracking-normal">Radar inteligente</h2>
+      </div>
+      <div className="mt-4 space-y-4">
+        <div>
+          <p className="text-xs font-semibold uppercase text-ink/40">Posibles recurrentes</p>
+          <div className="mt-2 space-y-2">
+            {candidates.length ? (
+              candidates.map((candidate) => (
+                <div key={candidate.label} className="rounded-lg bg-paper/60 p-3">
+                  <p className="text-sm font-semibold">{candidate.label}</p>
+                  <p className="text-xs font-medium text-ink/50">
+                    {candidate.count} veces · {currency.format(candidate.total)}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg bg-paper/60 p-3 text-xs font-medium text-ink/55">
+                Aun no hay patrones repetidos suficientes.
+              </p>
+            )}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase text-ink/40">Memoria de impulso</p>
+          <div className="mt-2 space-y-2">
+            {impulseItems.length ? (
+              impulseItems.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg bg-paper/60 p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{item.description}</p>
+                    <p className="text-xs font-medium text-ink/50">Valio la pena?</p>
+                  </div>
+                  <span className="text-sm font-semibold">{currency.format(item.amount)}</span>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg bg-paper/60 p-3 text-xs font-medium text-ink/55">
+                Sin compras recientes para revisar.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function PaydayPlan({ plan }) {
+  const total = plan.reduce((sum, item) => sum + item.amount, 0);
+
+  return (
+    <article className="rounded-lg border border-white/80 bg-white p-5 shadow-soft sm:p-6 lg:col-span-2">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-coral/15 text-clay">
+          <Banknote aria-hidden="true" size={20} />
+        </span>
+        <h2 className="text-lg font-semibold tracking-normal">Modo dia de pago</h2>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-4">
+        {plan.length ? (
+          plan.map((item) => (
+            <div key={item.label} className="rounded-lg bg-paper/60 p-3">
+              <p className="text-xs font-semibold text-ink/45">{item.label}</p>
+              <p className="mt-1 text-lg font-semibold">{currency.format(item.amount)}</p>
+              <div className="mt-3 h-2 rounded-full bg-white">
+                <div className="h-full rounded-full bg-sage" style={{ width: `${total ? (item.amount / total) * 100 : 0}%` }} />
+              </div>
+            </div>
+          ))
+        ) : (
+          <EmptyInsight icon={Banknote} label="Agrega un ingreso para repartirlo" />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function PrivacyPanel() {
+  return (
+    <article className="rounded-lg border border-white/80 bg-[#f8fbf8] p-5 shadow-soft sm:p-6">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sage/15 text-moss">
+          <ShieldCheck aria-hidden="true" size={20} />
+        </span>
+        <h2 className="text-lg font-semibold tracking-normal">Privacidad primero</h2>
+      </div>
+      <p className="mt-4 text-sm font-medium leading-6 text-ink/62">
+        Lumina puede ser inteligente sin conectar bancos ni vender datos: tus entradas manuales ya bastan para detectar ritmo, riesgo y margen.
+      </p>
+    </article>
+  );
+}
+
+function EmptyInsight({ icon: Icon, label }) {
+  return (
+    <div className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg bg-paper/60 text-center text-ink/50">
+      <Icon aria-hidden="true" size={24} />
+      <p className="text-xs font-semibold">{label}</p>
+    </div>
   );
 }
 
@@ -927,7 +1367,67 @@ function TransactionRow({ transaction }) {
 function QuickAdd({ onClose, onSave }) {
   const [movementType, setMovementType] = useState('expense');
   const today = new Date().toISOString().slice(0, 10);
+  const [draft, setDraft] = useState({
+    amount: '',
+    description: '',
+    source: '',
+    category: 'comida',
+    date: today,
+  });
+  const [voiceHint, setVoiceHint] = useState('Dictar movimiento');
   const isIncome = movementType === 'income';
+
+  function updateDraft(field, value) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function applyVoiceText(text) {
+    const normalized = normalizeText(text);
+    const amountMatch = normalized.match(/\b(\d+(?:[.,]\d+)?)\b/);
+    const amount = amountMatch ? amountMatch[1].replace(',', '.') : '';
+    const inferredIncome = /\b(cobre|cobro|ingreso|pago|pagaron|nomina|deposito|recibi)\b/.test(normalized);
+    const inferredCategory =
+      Object.keys(categories).find((key) => normalized.includes(normalizeText(categories[key].label))) ||
+      (normalized.includes('cafe') ? 'cafe' : normalized.includes('super') || normalized.includes('comida') ? 'comida' : 'compras');
+    const cleanDescription = text
+      .replace(/\b(gaste|gasto|pague|pago|cobre|cobro|ingreso|recibi|de|en|por)\b/gi, ' ')
+      .replace(/\d+(?:[.,]\d+)?/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    setMovementType(inferredIncome ? 'income' : 'expense');
+    setDraft((current) => ({
+      ...current,
+      amount: amount || current.amount,
+      category: inferredCategory,
+      description: cleanDescription || text,
+      source: inferredIncome ? cleanDescription || 'Ingreso' : current.source,
+    }));
+  }
+
+  function startVoiceCapture() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceHint('Dictado no disponible');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-MX';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    setVoiceHint('Escuchando...');
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      applyVoiceText(transcript);
+      setVoiceHint('Dictado aplicado');
+    };
+    recognition.onerror = () => setVoiceHint('No pude escuchar');
+    recognition.onend = () => {
+      setTimeout(() => setVoiceHint('Dictar movimiento'), 1400);
+    };
+    recognition.start();
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-ink/35 p-0 backdrop-blur-sm sm:items-center sm:justify-center sm:p-6">
@@ -957,6 +1457,14 @@ function QuickAdd({ onClose, onSave }) {
         </div>
 
         <div className="mt-6 grid gap-4">
+          <button
+            type="button"
+            onClick={startVoiceCapture}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-full border border-sage/25 bg-sage/10 px-4 text-sm font-semibold text-moss transition hover:bg-sage/18"
+          >
+            <Mic aria-hidden="true" size={18} />
+            {voiceHint}
+          </button>
           <div className="grid grid-cols-2 rounded-full bg-paper p-1">
             <button
               type="button"
@@ -985,6 +1493,8 @@ function QuickAdd({ onClose, onSave }) {
               min="1"
               step="1"
               required
+              value={draft.amount}
+              onChange={(event) => updateDraft('amount', event.target.value)}
               className="h-12 rounded-lg border border-paper bg-paper px-4 text-ink outline-none transition focus:border-sage focus:bg-white"
               placeholder="450"
             />
@@ -995,6 +1505,8 @@ function QuickAdd({ onClose, onSave }) {
               name="description"
               type="text"
               maxLength="100"
+              value={draft.description}
+              onChange={(event) => updateDraft('description', event.target.value)}
               className="h-12 rounded-lg border border-paper bg-paper px-4 text-ink outline-none transition focus:border-sage focus:bg-white"
               placeholder={isIncome ? 'Nomina' : 'Comida'}
             />
@@ -1006,6 +1518,8 @@ function QuickAdd({ onClose, onSave }) {
                 name="source"
                 type="text"
                 maxLength="80"
+                value={draft.source}
+                onChange={(event) => updateDraft('source', event.target.value)}
                 className="h-12 rounded-lg border border-paper bg-paper px-4 text-ink outline-none transition focus:border-sage focus:bg-white"
                 placeholder="Trabajo, venta, transferencia"
               />
@@ -1017,7 +1531,8 @@ function QuickAdd({ onClose, onSave }) {
                 Categoria
                 <select
                   name="category"
-                  defaultValue="comida"
+                  value={draft.category}
+                  onChange={(event) => updateDraft('category', event.target.value)}
                   className="h-12 rounded-lg border border-paper bg-paper px-3 text-ink outline-none transition focus:border-sage focus:bg-white"
                 >
                   {Object.entries(categories).map(([key, category]) => (
@@ -1033,7 +1548,8 @@ function QuickAdd({ onClose, onSave }) {
               <input
                 name="date"
                 type="date"
-                defaultValue={today}
+                value={draft.date}
+                onChange={(event) => updateDraft('date', event.target.value)}
                 required
                 className="h-12 rounded-lg border border-paper bg-paper px-3 text-ink outline-none transition focus:border-sage focus:bg-white"
               />
